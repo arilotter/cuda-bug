@@ -1,51 +1,48 @@
-use cudarc::driver::{CudaDevice, CudaSlice, DriverError};
+use cudarc::driver::{result, sys, CudaDevice, DriverError};
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 const SIZE: usize = 1 * 1024 * 1024;
+
 fn log(message: &str) {
     println!("{}", message);
     io::stdout().flush().unwrap();
 }
 
-fn malloc_thread(device: Arc<CudaDevice>, iteration: Arc<Mutex<u32>>) -> Result<(), DriverError> {
+fn malloc_thread(stream: sys::CUstream) -> Result<(), DriverError> {
+    let mut iter = 0;
     loop {
-        let iter = {
-            let mut iter = iteration.lock().unwrap();
-            *iter += 1;
-            *iter
-        };
-
         log(&format!("Malloc thread: Starting iteration {}", iter));
 
-        let _memory: CudaSlice<u8> = unsafe { device.alloc(SIZE)? };
-
-        // Explicitly drop the memory to deallocate
-        drop(_memory);
+        unsafe {
+            let mem =
+                cudarc::driver::result::malloc_async(stream, SIZE * std::mem::size_of::<u8>())?;
+            result::free_async(mem, stream)?;
+        };
+        iter += 1;
     }
 }
 
-fn memcpy_thread(device: Arc<CudaDevice>, iteration: Arc<Mutex<u32>>) -> Result<(), DriverError> {
+fn memcpy_thread(stream: sys::CUstream) -> Result<(), DriverError> {
+    let mut iter = 0;
     loop {
-        let iter = {
-            let mut iter = iteration.lock().unwrap();
-            *iter += 1;
-            *iter
-        };
-
         log(&format!("Memcpy thread: Starting iteration {}", iter));
 
         let mut host_data = vec![0u8; SIZE];
 
-        let mut device_data: CudaSlice<u8> = unsafe { device.alloc(SIZE) }?;
+        let device_data = unsafe {
+            cudarc::driver::result::malloc_async(stream, SIZE * std::mem::size_of::<u8>())?
+        };
 
         log("Memcpy thread: Async memcpy started");
-        device.dtoh_sync_copy_into(&mut device_data, &mut host_data)?;
+        unsafe { result::memcpy_dtoh_async(&mut host_data, device_data, stream) }?;
 
         // Explicitly drop to deallocate
-        drop(device_data);
+        unsafe {
+            result::free_async(device_data, stream)?;
+        }
+        iter += 1;
     }
 }
 
@@ -58,16 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device0 = CudaDevice::new(0)?;
     let device1 = CudaDevice::new(1)?;
 
-    let malloc_iteration = Arc::new(Mutex::new(0u32));
-    let memcpy_iteration = Arc::new(Mutex::new(0u32));
+    let _malloc_handle = thread::spawn(move || malloc_thread(device0.cu_stream().clone()));
 
-    let malloc_device = Arc::clone(&device1);
-    let malloc_iter = Arc::clone(&malloc_iteration);
-    let _malloc_handle = thread::spawn(move || malloc_thread(malloc_device, malloc_iter));
-
-    let memcpy_device = Arc::clone(&device0);
-    let memcpy_iter = Arc::clone(&memcpy_iteration);
-    let _memcpy_handle = thread::spawn(move || memcpy_thread(memcpy_device, memcpy_iter));
+    let _memcpy_handle = thread::spawn(move || memcpy_thread(device1.cu_stream().clone()));
 
     println!("Press Enter to stop the program...");
     let mut input = String::new();
