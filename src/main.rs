@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _malloc_handle = thread::spawn(move || malloc_thread(device0.cu_stream().clone()));
 
-    let _memcpy_handle = thread::spawn(move || memcpy_thread(device1.cu_stream().clone()));
+    // let _memcpy_handle = thread::spawn(move || memcpy_thread(device1.cu_stream().clone()));
 
     println!("Press Enter to stop the program...");
     let mut input = String::new();
