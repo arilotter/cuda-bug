@@ -18,7 +18,9 @@ fn malloc_thread(stream: sys::CUstream) -> Result<(), DriverError> {
         unsafe {
             let mem =
                 cudarc::driver::result::malloc_async(stream, SIZE * std::mem::size_of::<u8>())?;
+            log(&format!("Malloc thread: Malloc complete"));
             result::free_async(mem, stream)?;
+            log(&format!("Malloc thread: free complete"));
         };
         iter += 1;
     }
@@ -55,9 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device0 = CudaDevice::new(0)?;
     let device1 = CudaDevice::new(1)?;
 
-    let _malloc_handle = thread::spawn(move || malloc_thread(device0.cu_stream().clone()));
+    let _malloc_handle =
+        thread::spawn(move || malloc_thread(device0.fork_default_stream()?.stream));
 
-    // let _memcpy_handle = thread::spawn(move || memcpy_thread(device1.cu_stream().clone()));
+    let _memcpy_handle =
+        thread::spawn(move || memcpy_thread(device1.fork_default_stream()?.stream));
 
     println!("Press Enter to stop the program...");
     let mut input = String::new();
